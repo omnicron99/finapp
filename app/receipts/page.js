@@ -1,7 +1,8 @@
 // app/receipts/page.js
+import Link from "next/link";
 import { prisma } from "../../lib/prisma.js";
 
-export const dynamic = "force-dynamic"; // sempre buscar do banco
+export const dynamic = "force-dynamic";
 
 function centsToBRL(cents, currency = "BRL") {
   return (cents / 100).toLocaleString("pt-BR", { style: "currency", currency });
@@ -29,7 +30,7 @@ export default async function ReceiptsPage() {
     <main style={{ maxWidth: 980, margin: "24px auto", padding: 16 }}>
       <h1 style={{ marginBottom: 8 }}>Recibos salvos</h1>
       <p style={{ color: "#555" }}>
-        Itens processados pela API. <a href="/">Voltar ao upload</a>
+        Itens processados pela API. <Link href="/">Voltar ao upload</Link>
       </p>
 
       {items.length === 0 ? (
