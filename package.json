@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.17.1",
+    "@supabase/supabase-js": "^2.76.1",
     "chrono-node": "^2.9.0",
     "luxon": "^3.7.2",
     "next": "15.5.6",
