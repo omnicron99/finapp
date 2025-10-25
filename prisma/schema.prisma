@@ -1,0 +1,28 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")  // <- em dev já pode ser file:./prisma/dev.db
+}
+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Receipt {
+  id            String   @id @default(cuid())
+  title         String
+  amountCents   Int
+  currency      String   @default("BRL")
+  occurredAt    DateTime
+  sourceFile    String
+  rawText       String
+  ocrEngine     String
+  ocrConfidence Float?
+  category      String?  // 👈 novo (opcional)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+

@@ -1,0 +1,29 @@
+{
+  "name": "finapp",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "prestart": "node -e \"require('fs').mkdirSync(process.env.UPLOADS_DIR||'public/uploads',{recursive:true})\" && npx prisma db push",
+    "start": "next start -p 3000"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.17.1",
+    "chrono-node": "^2.9.0",
+    "luxon": "^3.7.2",
+    "next": "15.5.6",
+    "pdf-parse": "^2.4.5",
+    "prisma": "^6.17.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "tesseract.js": "^6.0.1",
+    "tesseract.js-core": "^6.0.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.6"
+  }
+}
