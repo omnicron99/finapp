@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 import { DateTime } from "luxon";
 import * as chrono from "chrono-node";
-import { prisma } from "../../lib/prisma.js";
+import { prisma } from "../../../lib/prisma.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
