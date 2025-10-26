@@ -10,7 +10,7 @@ import Tesseract from "tesseract.js"; // só usamos se quiser fallback direto (m
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
 import { prisma } from "../../../lib/prisma.js";
-import { supabase } from "../../../lib/supabase.js";
+import { getSupabaseServerClient } from "../../../lib/supabase.js";
 
 export const runtime = "nodejs";
 const pExecFile = promisify(execFile);
@@ -85,8 +85,10 @@ export async function POST(req) {
     const title = extractTitle(rawText, originalName);
 
     // 3) Upload para Supabase Storage
+    const supabase = getSupabaseServerClient();   // <-- lazy init no runtime
     const y = new Date().getFullYear();
-    const key = `${y}/${Date.now()}-${tmpName}`; // caminho no bucket
+    const key = `${y}/${Date.now()}-${tmpName}`;
+
     const up = await supabase.storage.from(BUCKET).upload(key, buffer, {
       contentType: mime,
       upsert: false,
@@ -98,7 +100,7 @@ export async function POST(req) {
     }
     const pub = supabase.storage.from(BUCKET).getPublicUrl(key);
     const publicUrl = pub.data?.publicUrl;
-
+    
     // 4) Persistir no banco (URL público)
     const rec = await prisma.receipt.create({
       data: {
