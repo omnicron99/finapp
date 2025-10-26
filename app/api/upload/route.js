@@ -5,7 +5,7 @@ import path from "path";
 import os from "os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import pdfParse from "pdf-parse";
+import * as pdfParseNS from "pdf-parse";
 import Tesseract from "tesseract.js"; // só usamos se quiser fallback direto (mantido)
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
@@ -14,6 +14,11 @@ import { supabase } from "../../../lib/supabase.js";
 
 export const runtime = "nodejs";
 const pExecFile = promisify(execFile);
+
+const pdfParse = pdfParseNS.default ?? pdfParseNS.PDFParse;
+if (!pdfParse) {
+  throw new Error("pdf-parse não expôs nem default nem PDFParse; verifique a versão instalada.");
+}
 
 const BUCKET = process.env.SUPABASE_BUCKET || "receipts";
 const TZ = "America/Sao_Paulo";
