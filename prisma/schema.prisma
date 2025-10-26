@@ -1,11 +1,7 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")  // <- em dev já pode ser file:./prisma/dev.db
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // Connection string do Supabase
 }
-
 
 generator client {
   provider = "prisma-client-js"
@@ -16,13 +12,16 @@ model Receipt {
   title         String
   amountCents   Int
   currency      String   @default("BRL")
-  occurredAt    DateTime
-  sourceFile    String
+  occurredAt    DateTime @db.Timestamptz(6)
+  sourceFile    String   // ex.: /files/2025/arquivo.pdf
   rawText       String
-  ocrEngine     String
+  ocrEngine     String   // "pdf-text" | "tesseract"
   ocrConfidence Float?
-  category      String?  // 👈 novo (opcional)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
+  category      String?
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt      @db.Timestamptz(6)
 
+  @@index([occurredAt])
+  @@index([createdAt])
+  @@index([category])
+}
