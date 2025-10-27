@@ -6,7 +6,7 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "prestart": "node -e \"require('fs').mkdirSync(process.env.UPLOADS_DIR||'public/uploads',{recursive:true})\" && npx prisma db push",
+    "prestart": "node -e \"require('fs').mkdirSync(process.env.UPLOADS_DIR||'public/uploads',{recursive:true})\"",
     "start": "next start -p 3000"
   },
   "dependencies": {
