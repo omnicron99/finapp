@@ -6,33 +6,27 @@ import os from "os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as pdfParseNS from "pdf-parse";
-import Tesseract from "tesseract.js"; // só usamos se quiser fallback direto (mantido)
+const pdfParse = pdfParseNS.default ?? pdfParseNS.PDFParse;
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
-import { prisma } from "../../../lib/prisma.js";
-import { getSupabaseServerClient } from "../../../lib/supabase.js";
+import { supabaseAdmin } from "../../../lib/supabase-admin.js";
 
 export const runtime = "nodejs";
 const pExecFile = promisify(execFile);
-
-const pdfParse = pdfParseNS.default ?? pdfParseNS.PDFParse;
-if (!pdfParse) {
-  throw new Error("pdf-parse não expôs nem default nem PDFParse; verifique a versão instalada.");
-}
-
-const BUCKET = process.env.SUPABASE_BUCKET || "receipts";
 const TZ = "America/Sao_Paulo";
 
-/* ================== POST ================== */
+// pasta de uploads (Render: setar UPLOADS_DIR=/app/storage/uploads)
+const uploadsDir = process.env.UPLOADS_DIR
+  ? process.env.UPLOADS_DIR
+  : path.join(process.cwd(), "public", "uploads");
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
 export async function POST(req) {
   try {
     const formData = await req.formData();
     const file = formData.get("file");
-    if (!file) {
-      return NextResponse.json({ error: "Arquivo não enviado" }, { status: 400 });
-    }
+    if (!file) return NextResponse.json({ error: "Arquivo não enviado" }, { status: 400 });
 
-    // lê buffer e metadados
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const originalName = file.name || `upload-${Date.now()}`;
@@ -40,24 +34,32 @@ export async function POST(req) {
     const mime = file.type || (ext === "pdf" ? "application/pdf" : "application/octet-stream");
     const isPDF = ext === "pdf" || mime === "application/pdf";
 
-    // caminho TEMP (para OCR/pdf raster)
+    // salva definitivo no disco (organizado por ano)
+    const yyyy = new Date().getFullYear();
+    const subdir = path.join(uploadsDir, String(yyyy));
+    if (!fs.existsSync(subdir)) fs.mkdirSync(subdir, { recursive: true });
+
+    const safeName = `${Date.now()}-${originalName}`.replace(/\s+/g, "_");
+    const finalPath = path.join(subdir, safeName);
+    fs.writeFileSync(finalPath, buffer);
+
+    // TEMP para OCR/pdf raster
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "finapp-"));
-    const tmpName = `${Date.now()}-${originalName}`.replace(/\s+/g, "_");
-    const tmpPath = path.join(tmpDir, tmpName);
+    const tmpPath = path.join(tmpDir, safeName);
     fs.writeFileSync(tmpPath, buffer);
 
-    // 1) Extrair texto (pdf-parse → fallback OCR por worker)
+    // extrai texto (pdf-parse → fallback OCR worker)
     let rawText = "";
     let ocrEngine = "";
     let ocrConfidence = null;
 
     if (isPDF) {
       try {
-        const pdfData = await pdfParse(buffer); // buffer direto
+        const pdfData = await pdfParse(buffer);
         rawText = (pdfData.text || "").trim();
         ocrEngine = rawText ? "pdf-text" : "tesseract";
         if (!rawText) {
-          const ocr = await runOCRWorker(tmpPath); // usa tmpPath
+          const ocr = await runOCRWorker(tmpPath);
           rawText = ocr.text;
           ocrConfidence = ocr.avg_confidence ?? null;
         }
@@ -79,126 +81,113 @@ export async function POST(req) {
       return NextResponse.json({ error: "Não foi possível extrair texto do arquivo." }, { status: 422 });
     }
 
-    // 2) Parsing de valor, data/hora e título
+    // parsing metadados
     const amountCents = extractAmountCentsBR(rawText);
     const occurredAt = extractDateTime(rawText) ?? new Date();
     const title = extractTitle(rawText, originalName);
 
-    // 3) Upload para Supabase Storage
-    const supabase = getSupabaseServerClient();   // <-- lazy init no runtime
-    const y = new Date().getFullYear();
-    const key = `${y}/${Date.now()}-${tmpName}`;
+    // URL pública local via rota /files (sem expor caminho real)
+    const publicUrl = `/files/${yyyy}/${safeName}`;
 
-    const up = await supabase.storage.from(BUCKET).upload(key, buffer, {
-      contentType: mime,
-      upsert: false,
-    });
-    if (up.error) {
-      console.error("[upload supabase] erro:", up.error);
-      cleanupTmp(tmpDir);
-      return NextResponse.json({ error: "Falha ao subir arquivo no storage" }, { status: 500 });
-    }
-    const pub = supabase.storage.from(BUCKET).getPublicUrl(key);
-    const publicUrl = pub.data?.publicUrl;
-    
-    // 4) Persistir no banco (URL público)
-    const rec = await prisma.receipt.create({
-      data: {
-        title,
-        amountCents,
-        currency: "BRL",
-        occurredAt,
-        sourceFile: publicUrl || `supabase://${BUCKET}/${key}`,
-        rawText,
-        ocrEngine,
-        ocrConfidence: ocrConfidence ?? undefined,
-      },
-    });
+    // === INSERT no Supabase via REST (sem Prisma) ===
+    const sb = supabaseAdmin();
+    const payload = {
+      id: cryptoRandomId(),
+      title,
+      amount_cents: amountCents,
+      currency: "BRL",
+      occurred_at: toISO(occurredAt),     // timestamptz
+      source_file: publicUrl,
+      raw_text: rawText,
+      ocr_engine: ocrEngine || "tesseract",
+      ocr_confidence: ocrConfidence ?? null,
+      category: null
+    };
+    const { data, error } = await sb
+      .from("Receipt")
+      .insert(payload)
+      .select("*")
+      .single();
 
-    // limpar temporários
     cleanupTmp(tmpDir);
+
+    if (error) {
+      console.error("[supabase insert] erro:", error);
+      return NextResponse.json({ error: "Falha ao salvar no banco" }, { status: 500 });
+    }
 
     return NextResponse.json({
       ok: true,
       receipt: {
-        id: rec.id,
-        title: rec.title,
-        amountBRL: centsToBRL(rec.amountCents),
-        occurredAt: rec.occurredAt,
-        sourceFile: rec.sourceFile,         // agora é URL https do Supabase
-        ocrEngine: rec.ocrEngine,
-        ocrConfidence: rec.ocrConfidence,
+        id: data.id,
+        title: data.title,
+        amountBRL: (data.amount_cents / 100).toLocaleString("pt-BR", { style: "currency", currency: data.currency }),
+        occurredAt: data.occurred_at,
+        sourceFile: data.source_file,
+        ocrEngine: data.ocr_engine,
+        ocrConfidence: data.ocr_confidence
       },
     });
   } catch (err) {
-    console.error(err);
+    console.error("[/api/upload] ERRO:", err);
     return NextResponse.json({ error: "Erro interno no upload" }, { status: 500 });
   }
 }
 
-/* ============== OCR worker runner (pdf/img) ============== */
+/* ===== Helpers ===== */
+
+function cryptoRandomId() {
+  // cuid-like simples sem dependência externa
+  return "r_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function toISO(d) {
+  // garante ISO com timezone (UTC) para timestamptz
+  return new Date(d).toISOString();
+}
+
 async function runOCRWorker(filePath) {
-  // usa o worker que você já tem (scripts/ocr-worker.cjs)
-  const tessdataDir =
-    process.env.TESSDATA_PREFIX ||
-    path.join(process.cwd(), "tessdata"); // em Docker já temos pacote por
-
-  const nodeBin = process.execPath; // node atual
+  const tessdataDir = process.env.TESSDATA_PREFIX || path.join(process.cwd(), "tessdata");
+  const nodeBin = process.execPath;
   const workerScript = path.join(process.cwd(), "scripts", "ocr-worker.cjs");
-
   const { stdout } = await pExecFile(nodeBin, [workerScript, filePath, tessdataDir], {
-    timeout: 120000, // 120s
-    maxBuffer: 128 * 1024 * 1024,
+    timeout: 120000, maxBuffer: 128 * 1024 * 1024,
   });
-
   const out = JSON.parse(stdout);
   if (!out.ok) throw new Error(out.message || "OCR_FAIL");
-  return out; // { ok, text, avg_confidence }
+  return out;
 }
 
 function cleanupTmp(tmpDir) {
   try {
-    const files = fs.readdirSync(tmpDir);
-    for (const f of files) fs.unlinkSync(path.join(tmpDir, f));
+    for (const f of fs.readdirSync(tmpDir)) fs.unlinkSync(path.join(tmpDir, f));
     fs.rmdirSync(tmpDir);
   } catch {}
 }
 
-/* ================= Helpers ================= */
-
 function extractAmountCentsBR(text) {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  const toCents = (s) => {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const moneyRegex = /(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+\.\d{2}|\d+,\d{2})/g;
+  const kw = /(total|valor|pagar|pagamento|cobrança|cobranca)/i;
+  const toCents = s => {
     const norm = s.replace(/[^\d,\.]/g, "").replace(/\./g, "").replace(",", ".");
     const n = Number(norm);
     return Number.isFinite(n) ? Math.round(n * 100) : NaN;
   };
-
-  const moneyRegex = /(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+\.\d{2}|\d+,\d{2})/g;
-  const kw = /(total|valor|pagar|pagamento|cobrança|cobranca)/i;
-
   const cand = [];
   lines.forEach((line, idx) => {
     let m;
     while ((m = moneyRegex.exec(line)) !== null) {
-      const raw = m[1];
-      const cents = toCents(raw);
+      const cents = toCents(m[1]);
       if (!Number.isFinite(cents)) continue;
-
       let score = 0;
       if (/R\$/i.test(line)) score += 3;
       if (kw.test(line)) score += 2;
       if (idx <= 6) score += 1;
       if (cents > 2_000_000) score -= 3;
-
-      cand.push({ cents, score, line, idx });
+      cand.push({ cents, score });
     }
   });
-
   if (cand.length === 0) return 0;
   cand.sort((a, b) => (b.score - a.score) || (b.cents - a.cents));
   return cand[0].cents;
@@ -214,8 +203,8 @@ function extractDateTime(text) {
     const dt = DateTime.fromFormat(`${y}-${mo}-${d} ${time}`, fmt, { zone: TZ });
     if (dt.isValid) return dt.toUTC().toJSDate();
   }
-  const reDate = /(\d{2}\/\d{2}\/\d{4})/;
-  const md = reDate.exec(text);
+  const onlyDate = /(\d{2}\/\d{2}\/\d{4})/;
+  const md = onlyDate.exec(text);
   if (md) {
     const [d, mo, y] = md[1].split("/").map(Number);
     const dt = DateTime.fromObject({ year: y, month: mo, day: d, hour: 12 }, { zone: TZ });
@@ -231,12 +220,8 @@ function extractDateTime(text) {
 }
 
 function extractTitle(text, fallbackName) {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const ignore = /^(cnpj|cpf|nota|nº|numero|número|documento|chave|coo|cupom|extrato|pagamento|debito|débito|credito|crédito)\b/i;
-  const candidate = lines.find((l) => l.length >= 4 && !ignore.test(l) && /[A-Za-zÀ-ÿ]/.test(l));
+  const candidate = lines.find(l => l.length >= 4 && !ignore.test(l) && /[A-Za-zÀ-ÿ]/.test(l));
   return (candidate || fallbackName).slice(0, 120);
-}
-
-function centsToBRL(cents) {
-  return (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
