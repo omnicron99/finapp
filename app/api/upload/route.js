@@ -84,8 +84,7 @@ export async function POST(req) {
     // parsing metadados
     const amountCents = extractAmountCentsBR(rawText);
     const occurredAt = extractDateTime(rawText) ?? new Date();
-    const title = extractTitle(rawText, originalName);
-
+    const title = extractRecipient(rawText, originalName);
     // URL pública local via rota /files (sem expor caminho real)
     const publicUrl = `/files/${yyyy}/${safeName}`;
 
@@ -225,3 +224,30 @@ function extractTitle(text, fallbackName) {
   const candidate = lines.find(l => l.length >= 4 && !ignore.test(l) && /[A-Za-zÀ-ÿ]/.test(l));
   return (candidate || fallbackName).slice(0, 120);
 }
+
+function extractRecipient(text, fallback) {
+  // Tenta capturar o nome do recebedor no padrão mais comum
+  // Ex: "Recebedor\nSupermercado Cometa Ltda"
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let idx = lines.findIndex(l => /^recebedor\b/i.test(l));
+  if (idx >= 0 && lines[idx + 1]) {
+    const next = lines[idx + 1].trim();
+    if (/[A-Za-zÀ-ÿ]{3,}/.test(next)) return next.slice(0, 120);
+  }
+
+  // Alternativas: palavras tipo "destinatário", "beneficiário", etc.
+  idx = lines.findIndex(l => /destinat|benefic/i.test(l));
+  if (idx >= 0 && lines[idx + 1]) {
+    const next = lines[idx + 1].trim();
+    if (/[A-Za-zÀ-ÿ]{3,}/.test(next)) return next.slice(0, 120);
+  }
+
+  // Fallback: tenta achar a primeira linha com nome de empresa
+  const empresa = lines.find(l =>
+    /(ltda|me|epp|comerc|supermerc|farm|padar|rest|loja|mercad)/i.test(l)
+  );
+  if (empresa) return empresa.slice(0, 120);
+
+  return fallback;
+}
+
